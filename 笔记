@@ -1,0 +1,113 @@
+构建镜像:
+docker build -t spark:v3.0.x .
+
+编辑
+kubectl edit deploy -n spark-operator
+
+
+执行任务方式一：
+kubectl apply -f examples/spark-pi.yaml
+
+
+
+
+./bin/spark-submit \
+  --class <main-class> \
+  --master <master-url> \
+  --deploy-mode <deploy-mode> \
+  --conf <key>=<value> \
+  ... # other options
+  <application-jar> \
+  [application-arguments]
+  
+  
+  application-jar: Path to a bundled jar including your application and all dependencies. The URL must be globally visible inside of your cluster, for instance, an hdfs:// path or a file:// path that is present on all nodes.
+
+./bin/spark-submit \
+  --class org.apache.spark.examples.SparkPi \
+  --master mesos://207.184.161.138:7077 \
+  --deploy-mode cluster \
+  --supervise \
+  --executor-memory 20G \
+  --total-executor-cores 100 \
+  http://path/to/examples.jar \
+  1000
+  
+  
+  
+  java客户端提交任务
+  
+    <dependency>
+            <groupId>io.fabric8</groupId>
+            <artifactId>kubernetes-client</artifactId>
+        </dependency>
+  
+   public static void main(String[] args) {
+        try {
+            Config config = new ConfigBuilder().withMasterUrl("https://kubernetes.docker.internal:6443")
+                    .build();
+            KubernetesClient client = new DefaultKubernetesClient(config);
+            CustomResourceDefinitionContext context = new CustomResourceDefinitionContext.Builder()
+                    .withGroup("sparkoperator.k8s.io")
+                    .withVersion("v1beta2")
+                    .withScope("Namespaced")
+                    .withName("spark-pi")
+                    .withPlural("sparkapplications")
+                    .withKind("SparkApplication")
+                    .build();
+            MixedOperation<GenericKubernetesResource, GenericKubernetesResourceList, Resource<GenericKubernetesResource>> resourceMixedOperation =
+                    client.genericKubernetesResources(context);
+            //文件流
+            resourceMixedOperation.inNamespace("spark-operator").load(K8sUtils.class.getResourceAsStream("/spark-pi.yaml"))
+                    .createOrReplace();
+            //监控任务的运行
+            resourceMixedOperation.watch(new Watcher<GenericKubernetesResource>() {
+                @Override
+                public void eventReceived(Action action, GenericKubernetesResource resource) {
+                    System.out.println("eventReceived~~~");
+                    if (action != Action.ADDED) {
+                        Map<String, Object> additionalProperties = resource.getAdditionalProperties();
+                        if (additionalProperties != null) {
+                            Map<String, Object> status = (Map<String, Object>) additionalProperties.get("status");
+                            Map<String, Object> state = (Map<String, Object>) status.get("applicationState");
+                            String state1 = state.get("state").toString();
+                            System.out.println(state1.toString());
+                        }
+                    }
+                }
+                @Override
+                public void onClose(WatcherException cause) {
+                    System.out.println("close~~~");
+                }
+            });
+
+        } catch (Exception e) {
+            log.error("fail to build k8s ApiClient", e);
+            throw new TaskException("fail to build k8s ApiClient");
+        }
+    }
+    
+    
+    
+     private void test() {
+        SparkGenericKubernetesResource sparkGenericKubernetesResource = new SparkGenericKubernetesResource();
+        sparkGenericKubernetesResource.setApiVersion("sparkoperator.k8s.io/v1beta2");
+        sparkGenericKubernetesResource.setKind("SparkApplication");
+        ObjectMeta meta = new ObjectMeta();
+        meta.setName("spark-pi");
+        meta.setNamespace("spark-operator");
+        sparkGenericKubernetesResource.setMetadata(meta);
+        SparkSpec spec = new SparkSpec();
+        spec.setImage("registry.cn-hangzhou.aliyuncs.com/terminus/spark:v3.0.0");
+        spec.setType("Scala");
+        spec.setMainApplicationFile("local:///opt/spark/examples/jars/spark-examples_2.12-3.0.0.jar");
+        spec.setMainClass("org.apache.spark.examples.SparkPi");
+        spec.setImagePullPolicy("IfNotPresent");
+        spec.setMode("cluster");
+        spec.setSparkVersion("3.0.0");
+        sparkGenericKubernetesResource.setSpec(spec);
+        KubernetesDeserializer.registerCustomKind("ssparkoperator.k8s.io/v1beta2", "SparkApplication",
+                SparkGenericKubernetesResource.class);
+        //对象
+        //xxxx.inNamespace("spark-operator").create(sparkGenericKubernetesResource);
+    }
